@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Data;
 using System.IO;
-using System.IO.Compression;
+using System.IO.Packaging;
 using System.Text;
 using System.Web;
 using System.Web.UI;
@@ -13,18 +13,19 @@ using iTextSharp.text.html.simpleparser;
 using iTextSharp.text;
 using iTextSharp.text.pdf;
 using System.Collections.Generic;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 
 /*************************************************************************************************
 * Author: Armond Smith
 * Created On: 5/16/2016
 * 
-* Last Modified By: Kyler Love
-* Last Modified On: 8/25/2016
+* Last Modified By: Armond Smith
+* Last Modified On: 12/13/2016
 * 
 * Authorized Contributors:
 * Kyler Love
-* Version 1.0.8
+* Version 1.2.0
 **************************************************************************************************/
 
 namespace WFUtilities
@@ -50,10 +51,14 @@ namespace WFUtilities
             * The easiest way to build the PDF that I do is to create a seperate aspx page and apply this method in the code behind so that I can 
             * call session objects with all the data I need. Passing in the page response will work in codebehind any page... Data.Export.BuildPDF(this.Response)
             **************************************************************************************************/
+
             /// <summary>
-            /// Builds the PDF.
+            /// Takes a Screenshot of the current page and converts it into a pdf file
             /// </summary>
-            public static void BuildPDF(HttpResponse Response)
+            /// <param name="Response"></param>
+            /// <param name="fileName">The name of the newly created screenshot file</param>
+            [TestMethod, Ignore]
+            public static void ScreenshotToPDF(HttpResponse Response, string fileName)
             {
                 //the string that will be the html... pass in the html if you are just trying to 
                 //turn a page into a pdf instead of using this
@@ -70,7 +75,7 @@ namespace WFUtilities
 
                     document.Open();
                     //This is where you would build the pdf with html if you are not passing in the HTML page text which is advised
-                    sb.Append("<h1 style='text-align: center;'>TEST</h1><br/><br/>");
+                    sb.Append("<h1 style='text-align: center;'>" + fileName + "</h1><br/><br/>");
 
                     var parsedHtmlElements = HTMLWorker.ParseToList(new StringReader(sb.ToString()), null);
 
@@ -82,16 +87,12 @@ namespace WFUtilities
                     document.Close();
 
                     Response.ContentType = "application/pdf";
-                    Response.AddHeader("Content-Disposition", string.Format("attachment;filename=TEST.pdf"));
+                    Response.AddHeader("Content-Disposition", string.Format("attachment;filename=" + fileName + ".pdf"));
                     Response.BinaryWrite(output.ToArray());
                 }
                 catch (Exception ex)
                 {
                     //do stuff with error
-                }
-                finally
-                {
-
                 }
             }
 
@@ -598,23 +599,67 @@ namespace WFUtilities
                 DataTableToCSV(myTable, response, fileName);
             }
 
-            public static void WriteZip(List<string> filePathes, HttpResponse response, string fileName)
+            /// <summary>
+            /// Writes Several Files into a zip file
+            /// </summary>
+            /// <param name="packagePath">The path of the package being zipped</param>
+            /// <param name="filePathes">The list of paths to be zipped into a package</param>
+            /// <param name="contentTypes">The content types of the files being zipped: ex: 'application/octet-stream' </param>
+            /// <param name="response">The HTTP Response handling the zipping</param>
+            /// <param name="fileName">The Name of the Created Zip File</param>
+            [TestMethod, Ignore]
+            public static void WriteZip(string packagePath, string[] filePathes, string[] contentTypes, HttpResponse response, string fileName)
             {
+                if (filePathes.Length != contentTypes.Length)
+                    throw new ArgumentException("The lengths of the number of files and the content types should be equal");
+
                 response.Clear();
                 response.AddHeader("content-disposition", "attachment; filename=" + fileName + ".zip");
                 response.ContentType = "application/zip";
 
-                foreach (string path in filePathes)
+                using (ZipPackage package = (ZipPackage)Package.Open(packagePath, FileMode.Create))
                 {
-                    byte[] bytes = File.ReadAllBytes(path);
-                    foreach (byte b in bytes)
+                    for (int i = 0; i < filePathes.Length; i++)
                     {
-                        response.OutputStream.WriteByte(b);
-                    }
-                }
-                response.Close();
 
+                        string destFilename = ".\\" + Path.GetFileName(filePathes[i]);
+                        Uri uri = PackUriHelper.CreatePartUri(new Uri(destFilename, UriKind.RelativeOrAbsolute));
+                        if (package.PartExists(uri))
+                        {
+                            package.DeletePart(uri);
+                        }
+                        PackagePart part = package.CreatePart(uri, "", CompressionOption.Normal);
+                        using (FileStream fileStream = new FileStream(filePathes[i], FileMode.Open, FileAccess.Read))
+                        {
+                            using (Stream dest = part.GetStream())
+                            {
+                                CopyStream(fileStream, dest);
+                            }
+                        }
+                    }
+
+                    package.Flush();
+                }
+
+                response.Write(packagePath);
+
+                response.Flush();
+                response.Close();
             }
+
+            private static void CopyStream(System.IO.FileStream inputStream, System.IO.Stream outputStream, int maxBuffer = 4096)
+            {
+                long bufferSize = inputStream.Length < maxBuffer ? inputStream.Length : maxBuffer;
+                byte[] buffer = new byte[bufferSize];
+                int bytesRead = 0;
+                long bytesWritten = 0;
+                while ((bytesRead = inputStream.Read(buffer, 0, buffer.Length)) != 0)
+                {
+                    outputStream.Write(buffer, 0, bytesRead);
+                    bytesWritten += bufferSize;
+                }
+            }
+
 
         }
 
@@ -819,7 +864,7 @@ namespace WFUtilities
             /// <param name="fileName"> Name of the file.</param>
             /// <param name="allowedExtentions"> The allowed extentions.</param>
             /// <param name = "virtualDownloadPath">  The relative path where the file will be stored temporarily</param>
-            /// <returns></returns>
+            /// <returns>Byte Arry containing the file's information</returns>
             /// <exception cref="System.ArgumentException">Uploaded file must have same extention as allowedExtentions</exception>
             public static byte[] SerializeFile(FileUpload control, string fileName, string[] allowedExtentions, string virtualDownloadPath = "~/UploadedForms/")
             {
@@ -878,7 +923,8 @@ namespace WFUtilities
             /// </summary>
             /// <param name="control">The FileUpload control.</param>
             /// <param name="fileName">Name of the file.</param>
-            /// <returns></returns>
+            /// <param name = "virtualDownloadPath">  The relative path where the file will be stored temporarily</param>
+            /// <returns>Byte Array containing the file's information</returns>
             public static byte[] SerializePDF(FileUpload control, string fileName, string virtualDownloadPath = "~/UploadedForms/")
             {
                 return SerializeFile(control, fileName, new string[] { ".pdf" }, virtualDownloadPath);
@@ -886,6 +932,7 @@ namespace WFUtilities
 
             /// <summary>
             /// Serializes an image.
+            /// Currently accepted formats: .jpg, .jpeg, .png, or .bmp
             /// </summary>
             /// <param name="control">The FileUpload control.</param>
             /// <param name="fileName">Name of the file.</param>
@@ -907,6 +954,9 @@ namespace WFUtilities
             /// <param name="contentType">Type of the content. Only change this if you understand Content type output.</param>
             public static void DeserializeFile(HttpResponse response, string fileName, byte[] serializedData, string fileType, string contentType = "application/octet-stream")
             {
+                if (!fileType.StartsWith("."))
+                    throw new ArgumentException("File Type is not a valid format. ex: '.pdf' ");
+
                 response.Clear();
                 response.AddHeader("content-disposition",
                 "attachment;filename=" + fileName + fileType);
@@ -934,6 +984,7 @@ namespace WFUtilities
 
             /// <summary>
             /// Deserializes a Byte Array and pushes it through response
+            /// Does not require Virtual Download Path
             /// </summary>
             /// <param name="response">The response.</param>
             /// <param name="fileName">Name of the file.</param>
@@ -942,6 +993,10 @@ namespace WFUtilities
             /// <param name="contentType">Type of the content. Only change this if you understand Content Type output</param>
             public static void ResponseDeserialize(HttpResponse response, string fileName, byte[] serializedData, string fileType, string contentType = "application/octet-stream")
             {
+                if (!fileType.StartsWith("."))
+                    throw new ArgumentException("File Type is not a valid format. ex: '.pdf' ");
+
+
                 response.Clear();
                 response.AddHeader("content-disposition", "attachment;filename=" + fileName + fileType);
                 response.Charset = "";
@@ -952,6 +1007,14 @@ namespace WFUtilities
                 response.End();
             }
 
+
+            /// <summary>
+            /// Deserializes a Byte Array and pushes it through response as a PDF File
+            /// Does not require Virtual Download Path
+            /// </summary>
+            /// <param name="response"></param>
+            /// <param name="fileName"></param>
+            /// <param name="pdfData"></param>
             public static void DeserializeResponsePDF(HttpResponse response, string fileName, byte[] pdfData)
             {
                 ResponseDeserialize(response, fileName, pdfData, ".pdf", "application/pdf");
@@ -996,8 +1059,5 @@ namespace WFUtilities
 
 
         }
-
-
-
     }
 }
